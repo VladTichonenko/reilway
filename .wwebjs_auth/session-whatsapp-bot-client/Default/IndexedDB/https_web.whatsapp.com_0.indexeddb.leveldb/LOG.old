@@ -1,0 +1,27 @@
+2026/02/03-22:20:49.496 324c Reusing MANIFEST D:\botewhatsapp\.wwebjs_auth\session-whatsapp-bot-client\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/02/03-22:20:49.496 324c Recovering log #111
+2026/02/03-22:20:49.501 324c Reusing old log D:\botewhatsapp\.wwebjs_auth\session-whatsapp-bot-client\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000111.log 
+2026/02/03-22:20:52.420 6cb0 Level-0 table #117: started
+2026/02/03-22:20:52.426 6cb0 Level-0 table #117: 225290 bytes OK
+2026/02/03-22:20:52.428 6cb0 Delete type=0 #111
+2026/02/03-22:20:52.428 6cb0 Manual compaction at level-0 from '\x00"\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00#\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/02/03-22:20:52.454 324c Compacting 1@1 + 2@2 files
+2026/02/03-22:20:52.493 324c Generated table #118@1: 53039 keys, 2215280 bytes
+2026/02/03-22:20:52.523 324c Generated table #119@1: 44182 keys, 1839234 bytes
+2026/02/03-22:20:52.523 324c Compacted 1@1 + 2@2 files => 4054514 bytes
+2026/02/03-22:20:52.523 324c compacted to: files[ 0 0 2 0 0 0 0 ]
+2026/02/03-22:20:52.524 324c Delete type=2 #113
+2026/02/03-22:20:52.524 324c Delete type=2 #114
+2026/02/03-22:20:52.524 324c Delete type=2 #117
+2026/02/03-22:39:05.045 5118 Level-0 table #121: started
+2026/02/03-22:39:05.070 5118 Level-0 table #121: 672860 bytes OK
+2026/02/03-22:39:05.071 5118 Delete type=0 #116
+2026/02/03-22:39:05.071 6cb0 Manual compaction at level-0 from '\x00#\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00$\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/02/03-22:39:50.507 324c Compacting 1@1 + 2@2 files
+2026/02/03-22:39:50.578 324c Generated table #122@1: 54019 keys, 2215732 bytes
+2026/02/03-22:39:50.628 324c Generated table #123@1: 47526 keys, 1966689 bytes
+2026/02/03-22:39:50.628 324c Compacted 1@1 + 2@2 files => 4182421 bytes
+2026/02/03-22:39:50.630 324c compacted to: files[ 0 0 2 0 0 0 0 ]
+2026/02/03-22:39:50.630 324c Delete type=2 #118
+2026/02/03-22:39:50.630 324c Delete type=2 #119
+2026/02/03-22:39:50.630 324c Delete type=2 #121
