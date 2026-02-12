@@ -2,6 +2,7 @@
 FROM node:18-slim
 
 # Устанавливаем необходимые системные зависимости для Puppeteer/Chrome
+# Полный список зависимостей для стабильной работы Puppeteer в Docker
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -11,14 +12,18 @@ RUN apt-get update && apt-get install -y \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
     libatspi2.0-0 \
+    libcairo2 \
+    libcairo-gobject2 \
     libcups2 \
     libdbus-1-3 \
     libdrm2 \
     libgbm1 \
     libglib2.0-0 \
+    libgtk-3-0 \
     libnspr4 \
     libnss3 \
     libpango-1.0-0 \
+    libpangocairo-1.0-0 \
     libx11-6 \
     libx11-xcb1 \
     libxcb1 \
@@ -26,8 +31,10 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxext6 \
     libxfixes3 \
+    libxi6 \
     libxkbcommon0 \
     libxrandr2 \
+    libxrender1 \
     libxshmfence1 \
     libxss1 \
     libxtst6 \
