@@ -108,7 +108,10 @@ const client = new Client({
       '--no-first-run',
       '--no-zygote',
       '--disable-gpu',
-      '--disable-blink-features=AutomationControlled'
+      '--disable-blink-features=AutomationControlled',
+      '--disable-software-rasterizer',
+      '--disable-extensions',
+      '--single-process'
     ]
   },
   // Дополнительные настройки для стабильности
