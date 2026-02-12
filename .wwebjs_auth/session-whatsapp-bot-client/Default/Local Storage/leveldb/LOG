@@ -1,3 +1,5 @@
-2026/02/12-19:19:06.730 13b4 Reusing MANIFEST D:\server sellubrick\reilway\.wwebjs_auth\session-whatsapp-bot-client\Default\Local Storage\leveldb/MANIFEST-000001
-2026/02/12-19:19:06.752 13b4 Recovering log #7
-2026/02/12-19:19:06.754 13b4 Reusing old log D:\server sellubrick\reilway\.wwebjs_auth\session-whatsapp-bot-client\Default\Local Storage\leveldb/000007.log 
+2026/02/12-19:38:09.519 4330 Reusing MANIFEST D:\server sellubrick\reilway\.wwebjs_auth\session-whatsapp-bot-client\Default\Local Storage\leveldb/MANIFEST-000001
+2026/02/12-19:38:09.529 4330 Recovering log #7
+2026/02/12-19:38:09.531 4330 Reusing old log D:\server sellubrick\reilway\.wwebjs_auth\session-whatsapp-bot-client\Default\Local Storage\leveldb/000007.log 
+2026/02/12-19:38:23.291 23a4 Level-0 table #11: started
+2026/02/12-19:38:23.304 23a4 Level-0 table #11: 15202 bytes OK

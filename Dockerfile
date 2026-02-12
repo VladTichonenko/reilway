@@ -51,8 +51,9 @@ COPY . .
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 ENV DISPLAY=:99
 
-# Открываем порт
+# Открываем порт (Railway будет использовать переменную PORT)
 EXPOSE 3001
+# Railway автоматически устанавливает PORT, но на случай если не установлен - используем 3001
 
 # Запускаем приложение
 CMD ["npm", "start"]

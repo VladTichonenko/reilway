@@ -3,6 +3,7 @@ const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
 const { askAI } = require('./ai-service');
 const { detectLanguageFromText, getLanguageName } = require('./language-detector');
@@ -13,7 +14,8 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
 
 // Создаем Express сервер для API
 const app = express();
-const BOT_PORT = process.env.BOT_PORT || 3001;
+// Railway автоматически устанавливает переменную PORT
+const BOT_PORT = process.env.PORT || process.env.BOT_PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
@@ -100,19 +102,31 @@ const client = new Client({
   }),
   puppeteer: {
     headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-software-rasterizer',
-      '--disable-extensions',
-      '--single-process'
-    ]
+    args: (() => {
+      // Базовые аргументы для всех окружений
+      const baseArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled'
+      ];
+      
+      // Дополнительные аргументы только для Docker/Railway (Linux окружение)
+      // Проверяем, запущены ли мы в Docker или на Railway
+      const isDocker = process.env.DOCKER === 'true' || 
+                      process.env.RAILWAY_ENVIRONMENT === 'true' ||
+                      (process.platform === 'linux' && fs.existsSync('/.dockerenv'));
+      
+      if (isDocker) {
+        // Для Docker/Railway добавляем дополнительные флаги
+        baseArgs.push('--no-zygote');
+      }
+      
+      return baseArgs;
+    })()
   },
   // Дополнительные настройки для стабильности
   restartOnAuthFail: true,
@@ -997,6 +1011,20 @@ debugEvents.forEach(eventName => {
 // ========== API ENDPOINTS ==========
 
 /**
+ * GET / - Healthcheck endpoint для Railway
+ */
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    service: 'WhatsApp Bot',
+    ready: botReady,
+    message: botReady 
+      ? 'Бот готов к работе' 
+      : 'Бот еще не готов. Дождитесь авторизации.'
+  });
+});
+
+/**
  * GET /api/status - Проверка статуса бота
  */
 app.get('/api/status', (req, res) => {
@@ -1165,16 +1193,23 @@ app.post('/api/broadcast', async (req, res) => {
   }
 });
 
-// Запускаем HTTP сервер
-app.listen(BOT_PORT, () => {
+// Запускаем HTTP сервер СНАЧАЛА (чтобы Railway не убил процесс)
+app.listen(BOT_PORT, '0.0.0.0', () => {
   console.log(`🌐 API сервер бота запущен на порту ${BOT_PORT}`);
-  console.log(`📡 Endpoints: GET /api/status, POST /api/broadcast`);
-});
-
-// Инициализация клиента
-console.log('🔄 Инициализация WhatsApp бота...');
-client.initialize().catch(error => {
-  console.error('❌ Ошибка инициализации клиента:', error);
+  console.log(`📡 Endpoints: GET /, GET /api/status, POST /api/broadcast`);
+  console.log(`✅ HTTP сервер готов, Railway может проверить healthcheck`);
+  
+  // Инициализация клиента после запуска HTTP сервера
+  // Для Railway используем небольшую задержку, для локального - сразу
+  const initDelay = process.env.PORT ? 500 : 0; // Если есть PORT (Railway), добавляем задержку
+  
+  setTimeout(() => {
+    console.log('🔄 Инициализация WhatsApp бота...');
+    client.initialize().catch(error => {
+      console.error('❌ Ошибка инициализации клиента:', error);
+      // Не завершаем процесс, чтобы HTTP сервер продолжал работать
+    });
+  }, initDelay);
 });
 
 // Обработка завершения процесса
