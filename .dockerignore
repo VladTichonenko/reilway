@@ -1,9 +1,9 @@
 node_modules
 npm-debug.log
-.wwebjs_auth
 .env
 .git
 .gitignore
 *.md
 !README.md
+# НЕ исключаем .wwebjs_auth - сессия должна быть в образе или volume
 

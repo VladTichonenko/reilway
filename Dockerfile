@@ -58,6 +58,9 @@ COPY . .
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 ENV DISPLAY=:99
 
+# Создаем директорию для сессии WhatsApp (если используется volume, она будет перезаписана)
+RUN mkdir -p /app/.wwebjs_auth
+
 # Открываем порт (Railway будет использовать переменную PORT)
 EXPOSE 3001
 # Railway автоматически устанавливает PORT, но на случай если не установлен - используем 3001
