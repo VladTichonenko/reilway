@@ -146,7 +146,38 @@ const conversationHistory = new Map();
 const firstMessageUsers = new Set();
 
 // Хранилище для отслеживания обработанных сообщений (для polling)
-const processedMessageIds = new Set();
+// Формат: Map<msgId, timestamp> - для возможности очистки старых записей
+const processedMessageIds = new Map();
+const MAX_PROCESSED_IDS = 10000; // Максимум ID в памяти
+const PROCESSED_ID_TTL = 3600000; // 1 час - время хранения ID
+
+// Функция очистки старых ID из processedMessageIds
+function cleanupProcessedIds() {
+  const now = Date.now();
+  let cleaned = 0;
+  
+  for (const [msgId, timestamp] of processedMessageIds.entries()) {
+    if (now - timestamp > PROCESSED_ID_TTL) {
+      processedMessageIds.delete(msgId);
+      cleaned++;
+    }
+  }
+  
+  // Если все еще слишком много записей, удаляем самые старые
+  if (processedMessageIds.size > MAX_PROCESSED_IDS) {
+    const sorted = Array.from(processedMessageIds.entries())
+      .sort((a, b) => a[1] - b[1]);
+    const toRemove = sorted.slice(0, processedMessageIds.size - MAX_PROCESSED_IDS);
+    for (const [msgId] of toRemove) {
+      processedMessageIds.delete(msgId);
+      cleaned++;
+    }
+  }
+  
+  if (cleaned > 0) {
+    console.log(`🧹 Очищено ${cleaned} старых ID из processedMessageIds. Осталось: ${processedMessageIds.size}`);
+  }
+}
 
 // Хранилище для всех активных интервалов и таймеров (для graceful shutdown)
 const activeIntervals = new Set();
@@ -407,13 +438,26 @@ client.on('ready', async () => {
     
     // Основной polling цикл
     let pollingCounter = 0;
+    let lastPollingError = null;
+    let lastPollingSuccess = Date.now();
     const pollingInterval = trackedSetInterval(async () => {
-      if (!botReady) return;
+      if (!botReady) {
+        if (pollingCounter % 20 === 0) {
+          console.warn('⚠️ [POLLING] Бот не готов, пропускаем цикл');
+        }
+        return;
+      }
       
       pollingCounter++;
+      const cycleStartTime = Date.now();
+      
       // Логируем каждые 20 циклов (примерно раз в минуту), что polling работает
       if (pollingCounter % 20 === 0) {
         console.log(`🔄 [POLLING] Проверка сообщений (цикл ${pollingCounter})...`);
+        console.log(`📊 [POLLING] Обработано ID сообщений: ${processedMessageIds.size}`);
+        if (lastPollingError) {
+          console.warn(`⚠️ [POLLING] Последняя ошибка: ${lastPollingError.message} (${Math.round((Date.now() - lastPollingError.time) / 1000)} сек назад)`);
+        }
       }
       
       try {
@@ -425,6 +469,9 @@ client.on('ready', async () => {
           console.log(`📊 [POLLING] Проверяем ${personalChats.length} личных чатов...`);
         }
         
+        let messagesFound = 0;
+        let messagesProcessed = 0;
+        
         // Проверяем ВСЕ личные чаты, а не только первые 5
         for (const chat of personalChats) {
           try {
@@ -432,6 +479,7 @@ client.on('ready', async () => {
             const messages = await chat.fetchMessages({ limit: 5 });
             
             if (messages.length > 0) {
+              messagesFound += messages.length;
               // Проверяем все сообщения, начиная с самого нового
               for (const msg of messages) {
                 // Пропускаем сообщения от бота
@@ -442,7 +490,7 @@ client.on('ready', async () => {
                 
                 // Проверяем, не обработали ли мы уже это сообщение
                 if (!processedMessageIds.has(msgId)) {
-                  // Проверяем, не слишком ли старое сообщение (больше 5 минут)
+                  // Проверяем, не слишком ли старое сообщение (больше 10 минут)
                   // timestamp может быть в секундах или миллисекундах
                   let msgTime = msg.timestamp;
                   if (msgTime < 1000000000000) {
@@ -452,26 +500,66 @@ client.on('ready', async () => {
                   const now = Date.now();
                   const age = now - msgTime;
                   
-                  // Обрабатываем только сообщения не старше 5 минут
-                  if (age < 300000) { // 5 минут = 300000 мс
-                    processedMessageIds.add(msgId);
+                  // Обрабатываем только сообщения не старше 10 минут (увеличено с 5)
+                  if (age < 600000) { // 10 минут = 600000 мс
+                    processedMessageIds.set(msgId, now); // Сохраняем с timestamp
+                    messagesProcessed++;
                     console.log('📨 [POLLING] Найдено новое сообщение через polling:', {
                       from: msg.from,
                       body: msg.body ? (msg.body.length > 50 ? msg.body.substring(0, 50) + '...' : msg.body) : '(нет текста)',
                       age: Math.round(age / 1000) + ' сек назад',
                       id: msgId.substring(0, 20) + '...'
                     });
-                    handleIncomingMessage(msg);
+                    handleIncomingMessage(msg).catch(error => {
+                      console.error('❌ Ошибка обработки сообщения:', error);
+                    });
+                  } else {
+                    // Помечаем как обработанное, чтобы не проверять снова
+                    processedMessageIds.set(msgId, now);
                   }
                 }
               }
             }
           } catch (msgError) {
-            // Игнорируем ошибки получения сообщений из отдельных чатов
+            // Логируем ошибки получения сообщений из отдельных чатов (только иногда)
+            if (Math.random() < 0.01) { // Логируем 1% ошибок
+              console.warn(`⚠️ [POLLING] Ошибка получения сообщений из чата ${chat.id?.user || chat.id}:`, msgError.message);
+            }
+          }
+        }
+        
+        // Успешное выполнение polling
+        lastPollingSuccess = Date.now();
+        lastPollingError = null;
+        const cycleDuration = Date.now() - cycleStartTime;
+        
+        // Логируем статистику каждые 20 циклов
+        if (pollingCounter % 20 === 0) {
+          if (messagesFound > 0 || messagesProcessed > 0) {
+            console.log(`📊 [POLLING] Найдено сообщений: ${messagesFound}, обработано новых: ${messagesProcessed}, время цикла: ${cycleDuration}мс`);
           }
         }
       } catch (pollError) {
-        console.warn('⚠️ Ошибка polling:', pollError.message);
+        lastPollingError = { message: pollError.message, time: Date.now() };
+        console.error('❌ [POLLING] Критическая ошибка polling:', pollError.message);
+        console.error('❌ [POLLING] Стек ошибки:', pollError.stack);
+        
+        // Проверяем состояние клиента при ошибке
+        try {
+          const state = await client.getState();
+          console.log(`📊 [POLLING] Состояние клиента при ошибке: ${state}`);
+          if (state !== 'CONNECTED') {
+            console.warn('⚠️ [POLLING] Клиент не подключен, возможно требуется переподключение');
+            botReady = false;
+          }
+        } catch (stateError) {
+          console.error('❌ [POLLING] Не удалось проверить состояние клиента:', stateError.message);
+        }
+      }
+      
+      // Периодическая очистка старых ID (каждые 100 циклов = ~5 минут)
+      if (pollingCounter % 100 === 0) {
+        cleanupProcessedIds();
       }
     }, 3000); // Проверяем каждые 3 секунды для более быстрой реакции
     
@@ -1024,16 +1112,20 @@ client.on('message', (msg) => {
   console.log('🔔 [EVENT] Событие "message" получено! (это редкость в версии 1.34.4)');
   const msgId = msg.id._serialized || msg.id.id || JSON.stringify(msg.id);
   if (!processedMessageIds.has(msgId)) {
-    processedMessageIds.add(msgId);
-    handleIncomingMessage(msg);
+    processedMessageIds.set(msgId, Date.now());
+    handleIncomingMessage(msg).catch(error => {
+      console.error('❌ Ошибка обработки сообщения из события:', error);
+    });
   }
 });
 client.on('message_create', (msg) => {
   console.log('🔔 [EVENT] Событие "message_create" получено! (это редкость в версии 1.34.4)');
   const msgId = msg.id._serialized || msg.id.id || JSON.stringify(msg.id);
   if (!processedMessageIds.has(msgId)) {
-    processedMessageIds.add(msgId);
-    handleIncomingMessage(msg);
+    processedMessageIds.set(msgId, Date.now());
+    handleIncomingMessage(msg).catch(error => {
+      console.error('❌ Ошибка обработки сообщения из события:', error);
+    });
   }
 });
 console.log('✅ Обработчики сообщений зарегистрированы (но основная работа через polling)');
@@ -1079,18 +1171,34 @@ app.get('/', (req, res) => {
  * GET /health - Дополнительный healthcheck endpoint
  * Используется для более детальной проверки состояния
  */
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   const memoryUsage = process.memoryUsage();
+  
+  // Проверяем состояние клиента
+  let clientState = 'unknown';
+  try {
+    if (client) {
+      clientState = await client.getState();
+    }
+  } catch (error) {
+    clientState = 'error: ' + error.message;
+  }
+  
   res.status(200).json({
     success: true,
     service: 'WhatsApp Bot',
     ready: botReady,
     status: botReady ? 'ready' : 'initializing',
+    clientState: clientState,
     uptime: Math.floor(process.uptime()),
     memory: {
       rss: Math.round(memoryUsage.rss / 1024 / 1024) + ' MB',
       heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + ' MB',
       heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + ' MB'
+    },
+    polling: {
+      processedMessages: processedMessageIds.size,
+      pollingActive: typeof global.pollingInterval !== 'undefined' && global.pollingInterval !== null
     },
     timestamp: new Date().toISOString()
   });
