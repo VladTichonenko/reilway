@@ -148,6 +148,45 @@ const firstMessageUsers = new Set();
 // Хранилище для отслеживания обработанных сообщений (для polling)
 const processedMessageIds = new Set();
 
+// Хранилище для всех активных интервалов и таймеров (для graceful shutdown)
+const activeIntervals = new Set();
+const activeTimeouts = new Set();
+
+// Обертка для setInterval с отслеживанием
+function trackedSetInterval(callback, delay) {
+  const id = setInterval(async () => {
+    try {
+      const result = callback();
+      // Если callback возвращает Promise, обрабатываем его
+      if (result && typeof result.then === 'function') {
+        await result;
+      }
+    } catch (error) {
+      console.error('❌ Ошибка в интервале:', error);
+    }
+  }, delay);
+  activeIntervals.add(id);
+  return id;
+}
+
+// Обертка для setTimeout с отслеживанием
+function trackedSetTimeout(callback, delay) {
+  const id = setTimeout(async () => {
+    activeTimeouts.delete(id);
+    try {
+      const result = callback();
+      // Если callback возвращает Promise, обрабатываем его
+      if (result && typeof result.then === 'function') {
+        await result;
+      }
+    } catch (error) {
+      console.error('❌ Ошибка в таймере:', error);
+    }
+  }, delay);
+  activeTimeouts.add(id);
+  return id;
+}
+
 // Максимальное количество сообщений в истории (чтобы не перегружать контекст)
 const MAX_HISTORY_LENGTH = 20;
 
@@ -368,7 +407,7 @@ client.on('ready', async () => {
     
     // Основной polling цикл
     let pollingCounter = 0;
-    const pollingInterval = setInterval(async () => {
+    const pollingInterval = trackedSetInterval(async () => {
       if (!botReady) return;
       
       pollingCounter++;
@@ -440,6 +479,8 @@ client.on('ready', async () => {
     if (typeof global.pollingInterval === 'undefined') {
       global.pollingInterval = pollingInterval;
     }
+    // Также добавляем в tracked intervals
+    activeIntervals.add(pollingInterval);
     
     // Дополнительная проверка через 5 секунд - возможно, нужно время на синхронизацию
     setTimeout(async () => {
@@ -1017,6 +1058,7 @@ debugEvents.forEach(eventName => {
 /**
  * GET / - Healthcheck endpoint для Railway
  * Важно: этот endpoint должен отвечать мгновенно, чтобы Railway не убил процесс
+ * Также используется для keep-alive, чтобы предотвратить idle timeout
  */
 app.get('/', (req, res) => {
   // Отвечаем сразу, не ждем готовности WhatsApp
@@ -1025,9 +1067,32 @@ app.get('/', (req, res) => {
     service: 'WhatsApp Bot',
     ready: botReady,
     status: botReady ? 'ready' : 'initializing',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
     message: botReady 
       ? 'Бот готов к работе' 
       : 'Бот инициализируется. HTTP сервер работает.'
+  });
+});
+
+/**
+ * GET /health - Дополнительный healthcheck endpoint
+ * Используется для более детальной проверки состояния
+ */
+app.get('/health', (req, res) => {
+  const memoryUsage = process.memoryUsage();
+  res.status(200).json({
+    success: true,
+    service: 'WhatsApp Bot',
+    ready: botReady,
+    status: botReady ? 'ready' : 'initializing',
+    uptime: Math.floor(process.uptime()),
+    memory: {
+      rss: Math.round(memoryUsage.rss / 1024 / 1024) + ' MB',
+      heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024) + ' MB',
+      heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024) + ' MB'
+    },
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -1200,17 +1265,52 @@ app.post('/api/broadcast', async (req, res) => {
   }
 });
 
+// Keep-alive механизм для предотвращения idle timeout на Railway
+// Railway может перезапускать контейнеры, если нет активности
+let keepAliveInterval = null;
+function startKeepAlive() {
+  // Отправляем периодические запросы к healthcheck endpoint
+  // Это помогает Railway видеть, что сервис активен
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+  }
+  
+  keepAliveInterval = trackedSetInterval(async () => {
+    try {
+      // Делаем внутренний запрос к healthcheck endpoint
+      const response = await axios.get(`http://localhost:${BOT_PORT}/health`, {
+        timeout: 2000,
+        validateStatus: () => true // Принимаем любой статус
+      });
+      // Логируем только при ошибках или раз в 10 минут
+      if (response.status !== 200 && Math.random() < 0.1) {
+        console.log(`💓 Keep-alive: статус ${response.status}`);
+      }
+    } catch (error) {
+      // Игнорируем ошибки keep-alive (сервер может быть еще не готов)
+      if (Math.random() < 0.01) { // Логируем только 1% ошибок
+        console.log('💓 Keep-alive: ошибка (можно игнорировать)');
+      }
+    }
+  }, 60000); // Каждую минуту
+  
+  console.log('💓 Keep-alive механизм запущен (каждую минуту)');
+}
+
 // Запускаем HTTP сервер СНАЧАЛА (чтобы Railway не убил процесс)
 const server = app.listen(BOT_PORT, '0.0.0.0', () => {
   console.log(`🌐 API сервер бота запущен на порту ${BOT_PORT}`);
-  console.log(`📡 Endpoints: GET /, GET /api/status, POST /api/broadcast`);
+  console.log(`📡 Endpoints: GET /, GET /health, GET /api/status, POST /api/broadcast`);
   console.log(`✅ HTTP сервер готов, Railway может проверить healthcheck`);
+  
+  // Запускаем keep-alive механизм
+  startKeepAlive();
   
   // Инициализация клиента после запуска HTTP сервера
   // Для Railway используем небольшую задержку, для локального - сразу
   const initDelay = process.env.PORT ? 1000 : 0; // Если есть PORT (Railway), добавляем задержку
   
-  setTimeout(() => {
+  trackedSetTimeout(() => {
     console.log('🔄 Инициализация WhatsApp бота...');
     console.log('⏳ Это может занять некоторое время...');
     console.log('💡 HTTP сервер уже работает, Railway не завершит процесс');
@@ -1237,9 +1337,102 @@ server.on('listening', () => {
   console.log(`✅ Сервер успешно слушает на ${addr.address}:${addr.port}`);
 });
 
+// Функция graceful shutdown
+let isShuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    console.log('⚠️ Завершение уже выполняется, принудительный выход...');
+    process.exit(1);
+    return;
+  }
+  
+  isShuttingDown = true;
+  console.log(`\n👋 Получен сигнал ${signal}, начинаем graceful shutdown...`);
+  
+  try {
+    // Останавливаем все интервалы
+    console.log('🛑 Остановка всех интервалов...');
+    activeIntervals.forEach(id => {
+      clearInterval(id);
+    });
+    activeIntervals.clear();
+    
+    // Очищаем все таймеры
+    console.log('🛑 Очистка всех таймеров...');
+    activeTimeouts.forEach(id => {
+      clearTimeout(id);
+    });
+    activeTimeouts.clear();
+    
+    // Очищаем глобальный polling interval
+    if (global.pollingInterval) {
+      clearInterval(global.pollingInterval);
+      global.pollingInterval = null;
+      console.log('✅ Polling interval остановлен');
+    }
+    
+    // Очищаем logout timeout
+    if (logoutTimeout) {
+      clearTimeout(logoutTimeout);
+      logoutTimeout = null;
+      console.log('✅ Logout timeout очищен');
+    }
+    
+    // Останавливаем keep-alive
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
+      console.log('✅ Keep-alive остановлен');
+    }
+    
+    // Закрываем HTTP сервер
+    console.log('🛑 Закрытие HTTP сервера...');
+    await new Promise((resolve) => {
+      server.close(() => {
+        console.log('✅ HTTP сервер закрыт');
+        resolve();
+      });
+      
+      // Таймаут на закрытие сервера (10 секунд)
+      setTimeout(() => {
+        console.log('⚠️ Таймаут закрытия сервера, продолжаем...');
+        resolve();
+      }, 10000);
+    });
+    
+    // Закрываем WhatsApp клиент
+    console.log('🛑 Закрытие WhatsApp клиента...');
+    try {
+      await Promise.race([
+        client.destroy(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout')), 15000)
+        )
+      ]);
+      console.log('✅ WhatsApp клиент закрыт');
+    } catch (destroyError) {
+      console.warn('⚠️ Ошибка при закрытии клиента (можно игнорировать):', destroyError.message);
+    }
+    
+    console.log('✅ Graceful shutdown завершен');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Ошибка при graceful shutdown:', error);
+    process.exit(1);
+  }
+}
+
 // Обработка завершения процесса
-process.on('SIGINT', async () => {
-  console.log('\n👋 Остановка бота...');
-  await client.destroy();
-  process.exit(0);
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Обработка необработанных ошибок
+process.on('uncaughtException', (error) => {
+  console.error('❌ Необработанное исключение:', error);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Необработанный rejection:', reason);
+  // Не завершаем процесс при unhandledRejection, только логируем
 });

@@ -24,3 +24,4 @@ if exist "whatsapp-session.tar.gz" (
     exit /b 1
 )
 
+
