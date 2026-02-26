@@ -106,6 +106,8 @@ const client = new Client({
   }),
   puppeteer: {
     headless: true,
+    // Увеличиваем таймаут CDP — при простое на Railway браузер может отвечать дольше (избегаем Runtime.callFunctionOn timed out)
+    protocolTimeout: parseInt(process.env.PROTOCOL_TIMEOUT_MS, 10) || 180000, // 3 минуты по умолчанию
     args: (() => {
       // Базовые аргументы для всех окружений
       const baseArgs = [
@@ -440,6 +442,8 @@ client.on('ready', async () => {
     let pollingCounter = 0;
     let lastPollingError = null;
     let lastPollingSuccess = Date.now();
+    let consecutivePollingErrors = 0;
+    const POLLING_RECONNECT_THRESHOLD = 3; // после N подряд таймаутов — переподключение
     const pollingInterval = trackedSetInterval(async () => {
       if (!botReady) {
         if (pollingCounter % 20 === 0) {
@@ -531,6 +535,7 @@ client.on('ready', async () => {
         // Успешное выполнение polling
         lastPollingSuccess = Date.now();
         lastPollingError = null;
+        consecutivePollingErrors = 0;
         const cycleDuration = Date.now() - cycleStartTime;
         
         // Логируем статистику каждые 20 циклов
@@ -541,19 +546,38 @@ client.on('ready', async () => {
         }
       } catch (pollError) {
         lastPollingError = { message: pollError.message, time: Date.now() };
-        console.error('❌ [POLLING] Критическая ошибка polling:', pollError.message);
+        const isTimeoutError = (pollError.message || '').includes('timed out') ||
+          (pollError.message || '').includes('ProtocolError') ||
+          (pollError.name === 'ProtocolError');
+        if (isTimeoutError) {
+          consecutivePollingErrors++;
+          console.error('❌ [POLLING] Критическая ошибка polling (таймаут CDP):', pollError.message);
+        } else {
+          consecutivePollingErrors++;
+          console.error('❌ [POLLING] Критическая ошибка polling:', pollError.message);
+        }
         console.error('❌ [POLLING] Стек ошибки:', pollError.stack);
         
-        // Проверяем состояние клиента при ошибке
-        try {
-          const state = await client.getState();
-          console.log(`📊 [POLLING] Состояние клиента при ошибке: ${state}`);
-          if (state !== 'CONNECTED') {
-            console.warn('⚠️ [POLLING] Клиент не подключен, возможно требуется переподключение');
-            botReady = false;
+        // При таймауте не вызываем getState() — он тоже уйдёт в таймаут и зависнет
+        if (!isTimeoutError) {
+          try {
+            const state = await client.getState();
+            console.log(`📊 [POLLING] Состояние клиента при ошибке: ${state}`);
+            if (state !== 'CONNECTED') {
+              console.warn('⚠️ [POLLING] Клиент не подключен, возможно требуется переподключение');
+              botReady = false;
+            }
+          } catch (stateError) {
+            console.error('❌ [POLLING] Не удалось проверить состояние клиента:', stateError.message);
           }
-        } catch (stateError) {
-          console.error('❌ [POLLING] Не удалось проверить состояние клиента:', stateError.message);
+        }
+        
+        // После нескольких подряд таймаутов — переподключаем клиент (оживляем браузер/сессию)
+        if (consecutivePollingErrors >= POLLING_RECONNECT_THRESHOLD) {
+          console.warn(`⚠️ [POLLING] Подряд ошибок: ${consecutivePollingErrors}. Запуск переподключения...`);
+          consecutivePollingErrors = 0;
+          botReady = false;
+          reconnectClient().catch(err => console.error('❌ Ошибка переподключения после polling:', err));
         }
       }
       
@@ -680,7 +704,11 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
 let lastReconnectTime = 0;
 const MIN_RECONNECT_INTERVAL = 60000; // Минимум 60 секунд между переподключениями
+// После длительного простоя (например неделя без пользователей) сбрасываем счётчик, чтобы снова пытаться переподключиться
+const RECONNECT_ATTEMPTS_RESET_AFTER_MS = 2 * 60 * 60 * 1000; // 2 часа
 let lastDisconnectTime = 0;
+/** Когда в последний раз исчерпали лимит попыток переподключения (для сброса после долгого простоя) */
+let lastMaxAttemptsReachedAt = 0;
 let disconnectCount = 0;
 const MAX_DISCONNECTS_PER_MINUTE = 3; // Максимум 3 отключения в минуту
 let logoutHandled = false; // Флаг для предотвращения множественной обработки LOGOUT
@@ -710,11 +738,20 @@ async function reconnectClient() {
   lastReconnectTime = Date.now();
 
   if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-    console.error('❌ Превышено максимальное количество попыток переподключения');
-    console.log('💡 Попробуйте перезапустить бота вручную');
-    console.log('💡 Это поможет избежать частых переподключений, которые могут вызвать LOGOUT');
-    isReconnecting = false;
-    return;
+    // После долгого простоя даём ещё один шанс — иначе бот навсегда останется "мёртвым" при простое неделю
+    const nowForReset = Date.now();
+    if (lastMaxAttemptsReachedAt === 0) lastMaxAttemptsReachedAt = nowForReset;
+    const timeSinceGiveUp = nowForReset - lastMaxAttemptsReachedAt;
+    if (timeSinceGiveUp < RECONNECT_ATTEMPTS_RESET_AFTER_MS) {
+      console.error('❌ Превышено максимальное количество попыток переподключения');
+      console.log(`💡 Следующая автоматическая попытка через ${Math.ceil((RECONNECT_ATTEMPTS_RESET_AFTER_MS - timeSinceGiveUp) / 60000)} мин (при долгом простое)`);
+      console.log('💡 Или перезапустите бота вручную');
+      isReconnecting = false;
+      return;
+    }
+    console.log('🔄 Долгий простой: сбрасываем счётчик попыток и пробуем переподключиться снова');
+    reconnectAttempts = 0;
+    lastMaxAttemptsReachedAt = 0;
   }
 
   // Экспоненциальная задержка: 10, 20, 40, 80, 160 секунд
@@ -725,17 +762,21 @@ async function reconnectClient() {
   await new Promise(resolve => setTimeout(resolve, delay));
   
   try {
-    // Проверяем, не инициализирован ли уже клиент
+    // Проверяем, не инициализирован ли уже клиент (с таймаутом — если браузер мёртв, не висим 3 мин)
     try {
-      const state = await client.getState();
+      const state = await Promise.race([
+        client.getState(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('getState timeout')), 15000))
+      ]);
       if (state === 'CONNECTED' || state === 'OPENING') {
         console.log('✅ Клиент уже подключен или подключается, отменяем переподключение');
         isReconnecting = false;
         reconnectAttempts = 0;
+        lastMaxAttemptsReachedAt = 0;
         return;
       }
     } catch (stateError) {
-      // Игнорируем ошибки проверки состояния
+      // Игнорируем ошибки проверки состояния (в т.ч. таймаут — значит браузер не отвечает)
     }
     
     // Пытаемся безопасно закрыть клиент
@@ -756,6 +797,7 @@ async function reconnectClient() {
     
     isReconnecting = false;
     reconnectAttempts = 0; // Сбрасываем счетчик при успешном подключении
+    lastMaxAttemptsReachedAt = 0;
     disconnectCount = 0; // Сбрасываем счетчик отключений
   } catch (error) {
     console.error('❌ Ошибка переподключения:', error.message);

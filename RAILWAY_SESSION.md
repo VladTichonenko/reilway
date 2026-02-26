@@ -74,3 +74,4 @@ tar -czf whatsapp-session.tar.gz .wwebjs_auth/
 - Если сессии нет, появится QR-код (отсканируйте один раз)
 
 
+
