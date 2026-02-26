@@ -546,20 +546,27 @@ client.on('ready', async () => {
         }
       } catch (pollError) {
         lastPollingError = { message: pollError.message, time: Date.now() };
-        const isTimeoutError = (pollError.message || '').includes('timed out') ||
-          (pollError.message || '').includes('ProtocolError') ||
+        const msgStr = String(pollError.message || '');
+        const isTimeoutError = msgStr.includes('timed out') ||
+          msgStr.includes('ProtocolError') ||
           (pollError.name === 'ProtocolError');
+        // Внутренняя страница/клиент библиотеки в мёртвом состоянии — getState() тоже упадёт, не вызываем его
+        const isClientBrokenError = msgStr.includes('getChats') && (msgStr.includes('undefined') || msgStr.includes('null'));
+        const skipGetState = isTimeoutError || isClientBrokenError;
         if (isTimeoutError) {
           consecutivePollingErrors++;
           console.error('❌ [POLLING] Критическая ошибка polling (таймаут CDP):', pollError.message);
+        } else if (isClientBrokenError) {
+          consecutivePollingErrors++;
+          console.error('❌ [POLLING] Критическая ошибка polling (клиент в нерабочем состоянии):', pollError.message);
         } else {
           consecutivePollingErrors++;
           console.error('❌ [POLLING] Критическая ошибка polling:', pollError.message);
         }
         console.error('❌ [POLLING] Стек ошибки:', pollError.stack);
         
-        // При таймауте не вызываем getState() — он тоже уйдёт в таймаут и зависнет
-        if (!isTimeoutError) {
+        // При таймауте или "undefined getChats" не вызываем getState() — он зависнет или упадёт так же
+        if (!skipGetState) {
           try {
             const state = await client.getState();
             console.log(`📊 [POLLING] Состояние клиента при ошибке: ${state}`);
@@ -572,7 +579,7 @@ client.on('ready', async () => {
           }
         }
         
-        // После нескольких подряд таймаутов — переподключаем клиент (оживляем браузер/сессию)
+        // После нескольких подряд ошибок — переподключаем клиент (оживляем браузер/сессию)
         if (consecutivePollingErrors >= POLLING_RECONNECT_THRESHOLD) {
           console.warn(`⚠️ [POLLING] Подряд ошибок: ${consecutivePollingErrors}. Запуск переподключения...`);
           consecutivePollingErrors = 0;
