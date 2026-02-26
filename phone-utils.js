@@ -52,7 +52,8 @@ const translations = {
     site: '🌐 Наш официальный сайт SellYourBrick, где вы можете посмотреть все объявления недвижимости:',
     echo: 'Вы написали:',
     useHelp: 'Используйте /help для списка команд.',
-    error: '❌ Произошла ошибка при обработке сообщения. Попробуйте еще раз.'
+    error: '❌ Произошла ошибка при обработке сообщения. Попробуйте еще раз.',
+    ciphertext_reply: '📩 Сообщение получено, но это зашифрованное или одноразовое сообщение — я не вижу текст. Напишите, пожалуйста, обычным текстом.'
   },
   es: {
     start: '👋 ¡Hola! Soy tu bot de WhatsApp. Escribe /help para ver la lista de comandos.',
@@ -86,7 +87,8 @@ Just write me any message and I will reply!`,
     site: '🌐 Our official SellYourBrick website, where you can view all property listings:',
     echo: 'You wrote:',
     useHelp: 'Use /help for a list of commands.',
-    error: '❌ An error occurred while processing the message. Please try again.'
+    error: '❌ An error occurred while processing the message. Please try again.',
+    ciphertext_reply: '📩 I received your message but it\'s encrypted or view-once — I can\'t read the text. Please send a regular text message.'
   },
   de: {
     start: '👋 Hallo! Ich bin dein WhatsApp-Bot. Tippe /help für eine Liste der Befehle.',

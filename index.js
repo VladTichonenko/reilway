@@ -1066,6 +1066,15 @@ async function handleIncomingMessage(msg) {
 
     // Пропускаем сообщения без текста или с пустым телом
     if (!msg.body || !msg.body.trim()) {
+      // Зашифрованные/одноразовые (ciphertext) или иные сообщения без текста — отвечаем подсказкой
+      try {
+        const lang = getLanguageFromPhone(msg.from) || 'ru';
+        const replyText = getTranslation(lang, 'ciphertext_reply');
+        await sendMessageSafely(msg, replyText, client);
+        console.log('📩 [DEBUG] Отправлена подсказка: сообщение без текста (ciphertext/одноразовое или другой тип)');
+      } catch (replyErr) {
+        console.warn('⚠️ Не удалось отправить подсказку:', replyErr.message);
+      }
       console.log('⏭️ [DEBUG] Пропущено сообщение без текста');
       return;
     }
