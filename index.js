@@ -340,6 +340,10 @@ const commandHandlers = {
     const response = `${siteText}\n\n${siteUrl}`;
     await sendMessageSafely(msg, response, client);
   },
+  '/ping': async (msg, language, client) => {
+    const pong = language === 'ru' ? 'Понг! Бот вас видит.' : 'Pong! Bot sees you.';
+    await sendMessageSafely(msg, pong, client);
+  },
 };
 
 // Функция для определения часового пояса по стране
@@ -469,8 +473,11 @@ client.on('ready', async () => {
         const personalChats = chats.filter(c => !c.isGroup && !c.isChannel);
         
         // Логируем каждые 20 циклов количество чатов
-        if (pollingCounter % 20 === 0) {
+        if (pollingCounter % 20 === 0 || logEveryCycle) {
           console.log(`📊 [POLLING] Проверяем ${personalChats.length} личных чатов...`);
+        }
+        if (personalChats.length === 0 && (pollingCounter % 10 === 0)) {
+          console.warn('⚠️ [POLLING] Личных чатов нет. Напишите боту в ЛС с этого номера — чат появится после первого сообщения.');
         }
         
         let messagesFound = 0;
@@ -479,13 +486,18 @@ client.on('ready', async () => {
         // Проверяем ВСЕ личные чаты, а не только первые 5
         for (const chat of personalChats) {
           try {
-            // Получаем последние 5 сообщений для более надежной проверки
-            const messages = await chat.fetchMessages({ limit: 5 });
+            // Получаем последние 15 сообщений (больше лимит — надёжнее при нестабильном порядке в fetchMessages)
+            const messages = await chat.fetchMessages({ limit: 15 });
             
             if (messages.length > 0) {
               messagesFound += messages.length;
-              // Проверяем все сообщения, начиная с самого нового
-              for (const msg of messages) {
+              // Сортируем по времени (новые первые) — в whatsapp-web.js порядок может быть некорректным
+              const sortedMessages = [...messages].sort((a, b) => {
+                let tA = a.timestamp && a.timestamp < 1000000000000 ? a.timestamp * 1000 : (a.timestamp || 0);
+                let tB = b.timestamp && b.timestamp < 1000000000000 ? b.timestamp * 1000 : (b.timestamp || 0);
+                return tB - tA;
+              });
+              for (const msg of sortedMessages) {
                 // Пропускаем сообщения от бота
                 if (msg.fromMe) continue;
                 
@@ -593,6 +605,9 @@ client.on('ready', async () => {
         cleanupProcessedIds();
       }
     }, 3000); // Проверяем каждые 3 секунды для более быстрой реакции
+    
+    // При включённой отладке — логируем каждый цикл (POLLING_DEBUG=1)
+    const logEveryCycle = process.env.POLLING_DEBUG === '1' || process.env.POLLING_DEBUG === 'true';
     
     // Сохраняем interval ID для возможной очистки
     if (typeof global.pollingInterval === 'undefined') {
@@ -991,6 +1006,11 @@ async function reconnectClientAfterLogout() {
 
 // Функция обработки сообщения (вынесена для переиспользования)
 async function handleIncomingMessage(msg) {
+  const from = msg.from || '?';
+  const body = msg.body ? (msg.body.length > 80 ? msg.body.substring(0, 80) + '...' : msg.body) : '(нет текста)';
+  const fromMe = !!msg.fromMe;
+  console.log('📩 handleIncomingMessage вызван:', { from, fromMe, bodyPreview: body });
+  
   // Логируем ВСЕ входящие сообщения для отладки
   console.log('📨 [DEBUG] Получено событие message:', {
     from: msg.from,
@@ -1055,6 +1075,11 @@ async function handleIncomingMessage(msg) {
     // Пропускаем сообщения из групп
     if (chat.isGroup) {
       console.log(`⚠️ Пропущено сообщение из группы: ${chat.name || chat.id.user}`);
+      try {
+        const lang = getLanguageFromPhone(msg.from) || 'ru';
+        const hint = lang === 'ru' ? 'Напишите мне в *личные сообщения* (ЛС), не в группе — там я отвечаю.' : 'Please message me in *private* (DM), not in a group — I only reply there.';
+        await sendMessageSafely(msg, hint, client);
+      } catch (e) { /* ignore */ }
       return;
     }
 

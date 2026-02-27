@@ -45,6 +45,7 @@ const translations = {
 /status - Проверить состояние бота
 /time - Текущее время
 /site - Перейти на сайт SellYourBrick
+/ping - Проверить, видит ли бот вас
 
 Просто напишите мне любое сообщение, и я отвечу!`,
     status: '✅ Бот работает! Статус: готов к работе',
@@ -63,6 +64,7 @@ const translations = {
 /status - Verificar el estado del bot
 /time - Hora actual
 /site - Ir al sitio web de SellYourBrick
+/ping - Comprobar si el bot te ve
 
 ¡Simplemente escríbeme cualquier mensaje y responderé!`,
     status: '✅ ¡El bot está funcionando! Estado: listo para trabajar',
@@ -80,6 +82,7 @@ const translations = {
 /status - Check bot status
 /time - Current time
 /site - Go to SellYourBrick website
+/ping - Check if the bot sees you
 
 Just write me any message and I will reply!`,
     status: '✅ Bot is working! Status: ready to work',
