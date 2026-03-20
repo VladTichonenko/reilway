@@ -5,12 +5,14 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
-const { askAI } = require('./ai-service');
+const { askAI, classifyLeadFromConversation } = require('./ai-service');
 const { detectLanguageFromText, getLanguageName } = require('./language-detector');
 const { translateText } = require('./translate-service');
 
 // URL сервера для сохранения WhatsApp пользователей
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
+const LEAD_CLASSIFY_DISABLED =
+  process.env.DISABLE_LEAD_CLASSIFICATION === '1' || process.env.DISABLE_LEAD_CLASSIFICATION === 'true';
 
 // Создаем Express сервер для API
 const app = express();
@@ -283,6 +285,24 @@ async function saveWhatsAppUser(chatId, contact, country, language) {
   } catch (error) {
     // Не критичная ошибка, просто логируем
     console.warn(`⚠️ Не удалось сохранить WhatsApp пользователя ${chatId}:`, error.message);
+  }
+}
+
+/** Отправка типа лида (hot/warm/cold) на основной сайт: whatsapp_users + assistant_leads с тем же телефоном */
+async function pushLeadTypeToServer(chatId, leadType) {
+  if (!chatId || !leadType) return;
+  try {
+    await axios.post(
+      `${SERVER_URL}/api/whatsapp/users/lead-type`,
+      {
+        phone_number: chatId,
+        lead_type: leadType
+      },
+      { timeout: 8000 }
+    );
+    console.log(`📊 Тип лида синхронизирован: ${chatId} → ${leadType}`);
+  } catch (error) {
+    console.warn(`⚠️ Не удалось отправить тип лида для ${chatId}:`, error.message);
   }
 }
 
@@ -1172,6 +1192,13 @@ async function handleIncomingMessage(msg) {
         console.log(`📤 Отправка ответа от AI на ${chatId}`);
         await sendMessageSafely(msg, aiResponse, client);
         console.log(`✅ Ответ от AI отправлен успешно`);
+
+        if (!LEAD_CLASSIFY_DISABLED) {
+          const historyForLead = getHistory(chatId);
+          classifyLeadFromConversation(historyForLead, userLanguage)
+            .then((leadType) => pushLeadTypeToServer(chatId, leadType))
+            .catch((err) => console.warn('⚠️ Классификация лида:', err.message));
+        }
       } catch (aiError) {
         console.error('❌ Ошибка при запросе к AI:', aiError);
         // В случае ошибки отправляем сообщение об ошибке

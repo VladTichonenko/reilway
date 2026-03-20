@@ -50,6 +50,18 @@ async function askAI(conversationHistory, userLanguage = 'ru') {
   }
   
   const platformKnowledgeStr = JSON.stringify(platformKnowledge, null, 2);
+
+  // Дополнительные инструкции и FAQ из bot-knowledge.json (раздел additional_prompts)
+  let additionalPromptsStr = '';
+  if (platformKnowledge.additional_prompts) {
+    const ap = platformKnowledge.additional_prompts;
+    if (ap.instructions && Array.isArray(ap.instructions) && ap.instructions.length > 0) {
+      additionalPromptsStr += '\n**Дополнительные правила (соблюдай обязательно):**\n' + ap.instructions.map((s, i) => `${i + 1}. ${s}`).join('\n');
+    }
+    if (ap.faq && Array.isArray(ap.faq) && ap.faq.length > 0) {
+      additionalPromptsStr += '\n\n**Частые вопросы и ответы (используй при подходящих вопросах):**\n' + ap.faq.map(f => `Вопрос: ${f.question}\nОтвет: ${f.answer}`).join('\n\n');
+    }
+  }
   
   const systemPrompt = `Ты — профессиональный консультант по недвижимости на платформе SellYourBrick. Твоя задача — помочь клиенту найти идеальный вариант недвижимости через аукцион, рассказать о платформе, процессе покупки, получении ВНЖ и всех деталях сделки.
 
@@ -57,6 +69,7 @@ async function askAI(conversationHistory, userLanguage = 'ru') {
 
 **БАЗА ЗНАНИЙ ПЛАТФОРМЫ (гайд продавцов, аукцион, доли — используй для ответов):**
 ${platformKnowledgeStr}
+${additionalPromptsStr ? `\n\n${additionalPromptsStr}` : ''}
 
 **ВАЖНО: РАБОТА С ИСТОЧНИКАМИ И БАЗОЙ ЗНАНИЙ:**
 1. ВСЕГДА сначала используй информацию из базы знаний платформы выше и базы знаний ниже, если она доступна
@@ -436,7 +449,80 @@ SellYourBrick — это уникальная платформа для поку
   }
 }
 
+const LEAD_TYPES = new Set(['hot', 'warm', 'cold']);
+
+/**
+ * По истории диалога (сайт или WhatsApp) определяет тип лида: hot / warm / cold.
+ * Возвращает только одно из трёх значений; при ошибке — cold.
+ */
+async function classifyLeadFromConversation(conversationHistory, userLanguage = 'ru') {
+  if (!conversationHistory || !Array.isArray(conversationHistory) || conversationHistory.length === 0) {
+    return 'cold';
+  }
+
+  const slice = conversationHistory.slice(-14);
+  const lines = slice.map((m) => {
+    const who = m.sender === 'user' ? 'Клиент' : 'Ассистент';
+    const text = (m.text || '').trim().slice(0, 800);
+    return `${who}: ${text}`;
+  });
+  const transcript = lines.join('\n');
+
+  const langNote =
+    userLanguage === 'ru'
+      ? 'Диалог может быть на русском или другом языке — оценивай смысл.'
+      : 'The dialogue may be in various languages — judge by intent.';
+
+  const systemPrompt = `Ты аналитик лидов для недвижимости (SellYourBrick). По фрагменту переписки оцени готовность клиента.
+
+${langNote}
+
+Шкала (одно значение):
+- hot (горячий): явный интерес к покупке/аукциону, готовность связаться, обсуждение бюджета/сроков/просмотра, «хочу купить», запрос контакта менеджера, конкретный объект.
+- warm (тёплый): уточняет регион, тип жилья, ВНЖ, процесс, сравнивает варианты, но без явной срочности или финального шага.
+- cold (холодный): приветствие, общие вопросы, «просто интересно», оффтоп, один короткий вопрос без развития.
+
+Ответь ТОЛЬКО одним JSON-объектом без текста до или после, без markdown:
+{"lead_type":"hot"|"warm"|"cold"}`;
+
+  const userPrompt = `Переписка:\n${transcript}`;
+
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${AI_API_KEY}`
+    };
+
+    const payload = {
+      model: AI_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.2
+    };
+
+    const response = await axios.post(AI_API_URL, payload, {
+      headers,
+      timeout: 45000
+    });
+
+    const data = response.data;
+    let messageContent = data?.choices?.[0]?.message?.content || '';
+    messageContent = String(messageContent).trim();
+    const jsonMatch = messageContent.match(/\{[\s\S]*"lead_type"[\s\S]*\}/);
+    const raw = jsonMatch ? jsonMatch[0] : messageContent;
+    const parsed = JSON.parse(raw);
+    const v = String(parsed.lead_type || '').toLowerCase();
+    if (LEAD_TYPES.has(v)) return v;
+  } catch (e) {
+    console.warn('⚠️ classifyLeadFromConversation:', e.message || e);
+  }
+  return 'cold';
+}
+
 module.exports = {
-  askAI
+  askAI,
+  classifyLeadFromConversation
 };
 
