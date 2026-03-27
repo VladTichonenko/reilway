@@ -1,13 +1,18 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 const { getLanguageFromPhone, getTranslation, getCountryFromPhone } = require('./phone-utils');
 const { askAI, classifyLeadFromConversation } = require('./ai-service');
 const { detectLanguageFromText, getLanguageName } = require('./language-detector');
 const { translateText } = require('./translate-service');
+
+/** Файл по запросу «компас»: относительно корня проекта. На сервере можно задать COMPASS_FILE_RELATIVE, например dock/документ.xlsx */
+const COMPASS_FILE_RELATIVE = process.env.COMPASS_FILE_RELATIVE || path.join('dock', 'компас.pdf');
+const COMPASS_FILE_ABSOLUTE = path.join(__dirname, COMPASS_FILE_RELATIVE);
 
 // URL сервера для сохранения WhatsApp пользователей
 const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
@@ -25,18 +30,19 @@ app.use(express.json());
 // Флаг готовности бота
 let botReady = false;
 
+function isMarkedUnreadError(error) {
+  const errorStr = error.message || error.toString() || '';
+  return (
+    errorStr.includes('markedUnread') ||
+    errorStr.includes('sendSeen') ||
+    errorStr.includes('Cannot read properties of undefined')
+  );
+}
+
 // Безопасная отправка сообщений с обработкой ошибок markedUnread
 async function sendMessageSafely(msg, text, client) {
   const chatId = msg.from;
-  
-  // Функция для проверки, является ли ошибка связанной с markedUnread
-  const isMarkedUnreadError = (error) => {
-    const errorStr = error.message || error.toString() || '';
-    return errorStr.includes('markedUnread') || 
-           errorStr.includes('sendSeen') ||
-           errorStr.includes('Cannot read properties of undefined');
-  };
-  
+
   // Метод 1: Пробуем отправить через chat.sendMessage (не вызывает sendSeen автоматически)
   try {
     const chat = await msg.getChat();
@@ -93,6 +99,57 @@ async function sendMessageSafely(msg, text, client) {
       console.error('❌ Все методы отправки не сработали:', finalError.message);
       throw finalError;
     }
+  }
+}
+
+/** Отправка файла (как sendMessageSafely, но MessageMedia). */
+async function sendFileSafely(msg, filePath, client, options = {}) {
+  const { caption = '' } = options;
+  const chatId = msg.from;
+  const media = MessageMedia.fromFilePath(filePath);
+
+  try {
+    const chat = await msg.getChat();
+    await chat.sendMessage(media, { caption, sendSeen: false });
+    return;
+  } catch (chatError) {
+    if (!isMarkedUnreadError(chatError)) {
+      console.error('❌ Ошибка отправки файла через chat.sendMessage:', chatError.message);
+    }
+  }
+
+  try {
+    await client.sendMessage(chatId, media, { caption, sendSeen: false });
+    return;
+  } catch (sendError) {
+    if (isMarkedUnreadError(sendError)) {
+      console.log('⚠️ markedUnread при отправке файла, пробую reply...');
+    } else {
+      console.error('❌ Ошибка отправки файла через sendMessage:', sendError.message);
+    }
+  }
+
+  try {
+    await msg.reply(media, undefined, { caption });
+    return;
+  } catch (replyError) {
+    if (!isMarkedUnreadError(replyError)) {
+      console.error('❌ Ошибка отправки файла через reply:', replyError.message);
+    }
+  }
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const chat = await msg.getChat();
+    await chat.sendMessage(media, { caption, sendSeen: false });
+    return;
+  } catch (finalError) {
+    if (isMarkedUnreadError(finalError)) {
+      console.log('⚠️ markedUnread при повторной отправке файла — возможно, файл всё же ушёл');
+      return;
+    }
+    console.error('❌ Все способы отправки файла не сработали:', finalError.message);
+    throw finalError;
   }
 }
 
@@ -363,6 +420,21 @@ const commandHandlers = {
   '/ping': async (msg, language, client) => {
     const pong = language === 'ru' ? 'Понг! Бот вас видит.' : 'Pong! Bot sees you.';
     await sendMessageSafely(msg, pong, client);
+  },
+
+  компас: async (msg, language, client) => {
+    if (!fs.existsSync(COMPASS_FILE_ABSOLUTE)) {
+      console.error('❌ Компас: нет файла по пути', COMPASS_FILE_ABSOLUTE);
+      const hint =
+        language === 'ru'
+          ? 'Файл сейчас недоступен. Администратору: положите документ в проект (см. COMPASS_FILE_RELATIVE в коде / .env).'
+          : 'The file is not available right now.';
+      await sendMessageSafely(msg, hint, client);
+      return;
+    }
+    const caption =
+      language === 'ru' ? 'Документ по запросу «Компас».' : 'Document you requested (compass).';
+    await sendFileSafely(msg, COMPASS_FILE_ABSOLUTE, client, { caption });
   },
 };
 
